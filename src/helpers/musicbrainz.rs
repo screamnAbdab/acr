@@ -795,14 +795,12 @@ pub fn is_mbid(input: &str) -> bool {
 
 /// Search MusicBrainz for a release group by artist and album name and return genres.
 ///
-/// Searches the release-group endpoint, takes the top match's MBID, then fetches
-/// its genres via `?inc=genres`. Returns a sorted, deduplicated list of genre names.
-pub fn search_release_group_genres(artist: &str, album: &str) -> Vec<String> {
+/// Search MusicBrainz for the release-group (album) MBID matching an artist/album name
+pub fn search_release_group_mbid(artist: &str, album: &str) -> Option<String> {
     if !is_enabled() {
-        return Vec::new();
+        return None;
     }
 
-    // Step 1: search for the release group
     let query = format!(
         "artist:\"{}\" AND releasegroup:\"{}\"",
         artist.replace('"', "\\\""),
@@ -822,7 +820,7 @@ pub fn search_release_group_genres(artist: &str, album: &str) -> Vec<String> {
         Ok(b) => b,
         Err(e) => {
             debug!("MusicBrainz release-group search failed for '{}' / '{}': {}", artist, album, e);
-            return Vec::new();
+            return None;
         }
     };
 
@@ -830,19 +828,27 @@ pub fn search_release_group_genres(artist: &str, album: &str) -> Vec<String> {
         Ok(v) => v,
         Err(e) => {
             debug!("Failed to parse MusicBrainz search response: {}", e);
-            return Vec::new();
+            return None;
         }
     };
 
-    let mbid = match json["release-groups"][0]["id"].as_str() {
-        Some(id) => id.to_string(),
+    match json["release-groups"][0]["id"].as_str() {
+        Some(id) => Some(id.to_string()),
         None => {
             debug!("No release-group found for '{}' / '{}'", artist, album);
-            return Vec::new();
+            None
         }
+    }
+}
+
+/// Search MusicBrainz for the genres tagged on an artist's album (release group)
+pub fn search_release_group_genres(artist: &str, album: &str) -> Vec<String> {
+    let mbid = match search_release_group_mbid(artist, album) {
+        Some(id) => id,
+        None => return Vec::new(),
     };
 
-    // Step 2: fetch genres for this release group
+    // Fetch genres for this release group
     let detail_url = format!("{}/release-group/{}?inc=genres&fmt=json", MUSICBRAINZ_API_BASE, mbid);
 
     ratelimit::rate_limit("musicbrainz");

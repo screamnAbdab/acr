@@ -726,41 +726,21 @@ pub fn get_album_coverart(album_name: &str, artist_name: &str, _year: Option<i32
                 let mut urls = Vec::new();
                 
                 for album_data in albums {
-                    // Get the main album thumbnail
+                    // Only the actual album cover. TheAudioDB also exposes
+                    // strAlbumThumb3D (3D box render), strAlbumSpine (case spine), and
+                    // strAlbumCDart (round CD art) for the same album, but none of those
+                    // are the album cover, and the image grader ranks purely by
+                    // resolution/size, so including them let a larger cdArt/3D image
+                    // outrank the real cover.
                     if let Some(thumb_url) = album_data.get("strAlbumThumb")
-                        .and_then(|u| u.as_str()) 
+                        .and_then(|u| u.as_str())
                     {
                         if !thumb_url.is_empty() {
                             urls.push(thumb_url.to_string());
                         }
                     }
-                    
-                    // Get additional album images if available
-                    if let Some(thumb_3d_url) = album_data.get("strAlbumThumb3D")
-                        .and_then(|u| u.as_str()) 
-                    {
-                        if !thumb_3d_url.is_empty() {
-                            urls.push(thumb_3d_url.to_string());
-                        }
-                    }
-                    
-                    if let Some(spine_url) = album_data.get("strAlbumSpine")
-                        .and_then(|u| u.as_str()) 
-                    {
-                        if !spine_url.is_empty() {
-                            urls.push(spine_url.to_string());
-                        }
-                    }
-                    
-                    if let Some(cd_art_url) = album_data.get("strAlbumCDart")
-                        .and_then(|u| u.as_str()) 
-                    {
-                        if !cd_art_url.is_empty() {
-                            urls.push(cd_art_url.to_string());
-                        }
-                    }
                 }
-                
+
                 if !urls.is_empty() {
                     debug!("TheAudioDB: Found {} album images for '{}' by '{}' (specific search)", urls.len(), album_name, artist_name);
                     return urls;
@@ -789,24 +769,17 @@ pub fn get_album_coverart(album_name: &str, artist_name: &str, _year: Option<i32
                         if album_title.to_lowercase().contains(&album_name_lower) || 
                            album_name_lower.contains(&album_title.to_lowercase()) {
                             
-                            // Get the main album thumbnail
+                            // Only the actual album cover - see comment in the primary
+                            // search branch above for why strAlbumThumb3D/Spine/CDart
+                            // are excluded.
                             if let Some(thumb_url) = album_data.get("strAlbumThumb")
-                                .and_then(|u| u.as_str()) 
+                                .and_then(|u| u.as_str())
                             {
                                 if !thumb_url.is_empty() {
                                     urls.push(thumb_url.to_string());
                                 }
                             }
-                            
-                            // Get additional album images if available
-                            if let Some(thumb_3d_url) = album_data.get("strAlbumThumb3D")
-                                .and_then(|u| u.as_str()) 
-                            {
-                                if !thumb_3d_url.is_empty() {
-                                    urls.push(thumb_3d_url.to_string());
-                                }
-                            }
-                            
+
                             break; // Found matching album, use first match
                         }
                     }

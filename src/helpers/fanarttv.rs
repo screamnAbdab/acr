@@ -295,6 +295,84 @@ pub fn get_artist_banners(artist_mbid: &str) -> Vec<String> {
     banner_urls
 }
 
+/// Get album cover URLs from FanArt.tv
+///
+/// FanArt.tv's music endpoint is keyed by artist MBID and returns all of that
+/// artist's albums (keyed by release-group MBID) in one response, each with its
+/// own `albumcover` and `cdart` arrays. This only reads `albumcover` - `cdart` is
+/// a separate, round "CD art" image, not the album cover.
+///
+/// # Arguments
+/// * `artist_mbid` - MusicBrainz ID of the artist
+/// * `album_mbid` - MusicBrainz release-group ID of the album
+///
+/// # Returns
+/// * `Vec<String>` - URLs of the album cover images, empty if none found
+pub fn get_album_covers(artist_mbid: &str, album_mbid: &str) -> Vec<String> {
+    if !is_enabled() {
+        debug!("FanArt.tv lookups are disabled");
+        return Vec::new();
+    }
+
+    let api_key = match get_api_key() {
+        Some(key) => key,
+        None => {
+            warn!("No FanArt.tv API key configured");
+            return Vec::new();
+        }
+    };
+
+    if FAILED_MBID_CACHE.get(artist_mbid).is_some() {
+        debug!("MBID '{}' found in negative cache (previous FanArt.tv lookup failed)", artist_mbid);
+        return Vec::new();
+    }
+
+    let url = format!(
+        "http://webservice.fanart.tv/v3/music/{}?api_key={}",
+        artist_mbid,
+        api_key
+    );
+
+    let mut cover_urls = Vec::new();
+
+    let client = http_client();
+    match client.get_text(&url) {
+        Ok(response_text) => {
+            match serde_json::from_str::<Value>(&response_text) {
+                Ok(data) => {
+                    if let Some(covers) = data.get("albums")
+                        .and_then(|albums| albums.get(album_mbid))
+                        .and_then(|album| album.get("albumcover"))
+                        .and_then(|c| c.as_array())
+                    {
+                        for cover in covers {
+                            if let Some(url) = cover.get("url").and_then(|u| u.as_str()) {
+                                cover_urls.push(url.to_string());
+                            }
+                        }
+                    }
+
+                    if !cover_urls.is_empty() {
+                        debug!("Found {} album covers on fanart.tv for album MBID {}", cover_urls.len(), album_mbid);
+                    } else {
+                        debug!("Found no album cover on fanart.tv for artist MBID {} / album MBID {}", artist_mbid, album_mbid);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to parse JSON from fanart.tv for MBID {}: {}", artist_mbid, e);
+                    FAILED_MBID_CACHE.insert(artist_mbid.to_string(), true);
+                }
+            }
+        }
+        Err(e) => {
+            debug!("GET request failed: {}: status code 404", e);
+            FAILED_MBID_CACHE.insert(artist_mbid.to_string(), true);
+        }
+    }
+
+    cover_urls
+}
+
 
 
 
@@ -371,18 +449,19 @@ impl CoverartProvider for FanarttvCoverartProvider {
     fn supported_methods(&self) -> HashSet<CoverartMethod> {
         let mut methods = HashSet::new();
         methods.insert(CoverartMethod::Artist);
+        methods.insert(CoverartMethod::Album);
         methods
     }
-    
+
     /// Implementation for artist cover art retrieval
     /// Returns thumbnail URLs for the given artist by looking up their MusicBrainz ID
     fn get_artist_coverart_impl(&self, artist: &str) -> Vec<String> {
         debug!("FanArt.tv CoverArt: Getting cover art for artist '{}'", artist);
-        
+
         // First, attempt to get the MusicBrainz ID for the artist
         if let Some(mbid) = self.get_artist_mbid(artist) {
             debug!("FanArt.tv CoverArt: Found MBID '{}' for artist '{}'", mbid, artist);
-            
+
             // Get artist thumbnails using the MBID
             let thumbnails = get_artist_thumbnails(&mbid, Some(5));
             if !thumbnails.is_empty() {
@@ -394,8 +473,37 @@ impl CoverartProvider for FanarttvCoverartProvider {
         } else {
             debug!("FanArt.tv CoverArt: No MusicBrainz ID found for artist '{}'", artist);
         }
-        
+
         Vec::new()
+    }
+
+    /// Implementation for album cover art retrieval
+    /// Resolves the artist and release-group (album) MusicBrainz IDs, then looks up
+    /// the album cover on FanArt.tv
+    fn get_album_coverart_impl(&self, title: &str, artist: &str, _year: Option<i32>) -> Vec<String> {
+        debug!("FanArt.tv CoverArt: Getting album cover art for '{}' by '{}'", title, artist);
+
+        let artist_mbid = match self.get_artist_mbid(artist) {
+            Some(mbid) => mbid,
+            None => {
+                debug!("FanArt.tv CoverArt: No MusicBrainz artist ID found for '{}'", artist);
+                return Vec::new();
+            }
+        };
+
+        let album_mbid = match crate::helpers::musicbrainz::search_release_group_mbid(artist, title) {
+            Some(mbid) => mbid,
+            None => {
+                debug!("FanArt.tv CoverArt: No MusicBrainz release-group ID found for '{}' by '{}'", title, artist);
+                return Vec::new();
+            }
+        };
+
+        let covers = get_album_covers(&artist_mbid, &album_mbid);
+        if !covers.is_empty() {
+            debug!("FanArt.tv CoverArt: Found {} album covers for '{}' by '{}'", covers.len(), title, artist);
+        }
+        covers
     }
 }
 
@@ -420,18 +528,26 @@ mod tests {
     fn test_fanarttv_coverart_provider_supported_methods() {
         let provider = FanarttvCoverartProvider::new();
         let methods = provider.supported_methods();
-        assert_eq!(methods.len(), 1);
+        assert_eq!(methods.len(), 2);
         assert!(methods.contains(&CoverartMethod::Artist));
+        assert!(methods.contains(&CoverartMethod::Album));
         assert!(!methods.contains(&CoverartMethod::Song));
-        assert!(!methods.contains(&CoverartMethod::Album));
         assert!(!methods.contains(&CoverartMethod::Url));
     }
-    
+
     #[test]
     fn test_fanarttv_coverart_provider_get_artist_coverart_impl() {
         let provider = FanarttvCoverartProvider::new();
         let result = provider.get_artist_coverart_impl("Test Artist");
-        // Should return empty since get_artist_mbid returns None (placeholder implementation)
+        // Should return empty since MusicBrainz lookups are disabled by default in tests
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_fanarttv_coverart_provider_get_album_coverart_impl() {
+        let provider = FanarttvCoverartProvider::new();
+        let result = provider.get_album_coverart_impl("Test Album", "Test Artist", None);
+        // Should return empty since MusicBrainz lookups are disabled by default in tests
         assert!(result.is_empty());
     }
     

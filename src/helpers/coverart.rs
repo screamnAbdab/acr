@@ -128,6 +128,20 @@ impl CoverartResult {
     }
 }
 
+/// Order provider result blocks so the single highest-graded image across *all*
+/// providers ends up at `results[0].images[0]`.
+///
+/// Each provider's own `images` list is already sorted best-first (see
+/// `CoverartResult::with_images`), so a provider's first image is that
+/// provider's own maximum grade. Sorting the provider blocks themselves by that
+/// value is therefore equivalent to ranking every image from every provider
+/// together: max(max(group)) == max(all).
+fn sort_by_best_image(results: &mut [CoverartResult]) {
+    results.sort_by_key(|r| {
+        std::cmp::Reverse(r.images.first().and_then(|i| i.grade).unwrap_or(i32::MIN))
+    });
+}
+
 /// Defines the types of cover art retrieval methods that a provider can support
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CoverartMethod {
@@ -263,9 +277,10 @@ impl CoverartManager {
         debug!("Total registered providers: {}", self.providers.len());
     }
 
-    /// Get cover art for an artist from all registered providers
+    /// Get cover art for an artist from all registered providers, ordered so the
+    /// single best-graded image across all providers comes first
     pub fn get_artist_coverart(&self, artist: &str) -> Vec<CoverartResult> {
-        self.providers
+        let mut results: Vec<CoverartResult> = self.providers
             .iter()
             .filter_map(|provider| {
                 let urls = provider.get_artist_coverart(artist);
@@ -281,7 +296,9 @@ impl CoverartManager {
                     None
                 }
             })
-            .collect()
+            .collect();
+        sort_by_best_image(&mut results);
+        results
     }
 
     /// Get cover art for a song from all registered providers
@@ -305,9 +322,10 @@ impl CoverartManager {
             .collect()
     }
 
-    /// Get cover art for an album from all registered providers
+    /// Get cover art for an album from all registered providers, ordered so the
+    /// single best-graded image across all providers comes first
     pub fn get_album_coverart(&self, title: &str, artist: &str, year: Option<i32>) -> Vec<CoverartResult> {
-        self.providers
+        let mut results: Vec<CoverartResult> = self.providers
             .iter()
             .filter_map(|provider| {
                 let urls = provider.get_album_coverart(title, artist, year);
@@ -323,7 +341,9 @@ impl CoverartManager {
                     None
                 }
             })
-            .collect()
+            .collect();
+        sort_by_best_image(&mut results);
+        results
     }
 
     /// Get cover art from a URL from all registered providers

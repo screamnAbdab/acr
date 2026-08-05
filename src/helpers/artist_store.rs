@@ -330,37 +330,23 @@ impl ArtistStore {
             }
         }
 
-        // Use the cover art system to find images
+        // Use the cover art system to find images. CoverartManager::get_artist_coverart
+        // already orders providers so the single best-graded image across all of
+        // them is results[0].images[0].
         let manager = get_coverart_manager();
         let manager_guard = manager.lock();
         let results = manager_guard.get_artist_coverart(artist_name);
         drop(manager_guard);
 
-        if results.is_empty() {
-            debug!("No cover art found for artist {}", artist_name);
-            return ArtistImageResult::NotFound;
-        }
-
-        // Find the highest-rated image across all providers
-        let mut best_image: Option<&crate::helpers::coverart::ImageInfo> = None;
-        let mut best_grade = -10; // Start lower to allow grade -1 images
-
-        for result in &results {
-            for image in &result.images {
-                let grade = image.grade.unwrap_or(0);
-                if grade > best_grade {
-                    best_grade = grade;
-                    best_image = Some(image);
-                }
+        match results.first().and_then(|r| r.images.first()) {
+            Some(best_image) => {
+                debug!("Found best image for artist {} with grade {:?}: {}", artist_name, best_image.grade, best_image.url);
+                self.download_and_cache_image(artist_name, &best_image.url, "cover")
             }
-        }
-
-        if let Some(best_image) = best_image {
-            debug!("Found best image for artist {} with grade {}: {}", artist_name, best_grade, best_image.url);
-            self.download_and_cache_image(artist_name, &best_image.url, "cover")
-        } else {
-            debug!("No images with valid grades found for artist {}", artist_name);
-            ArtistImageResult::NotFound
+            None => {
+                debug!("No cover art found for artist {}", artist_name);
+                ArtistImageResult::NotFound
+            }
         }
     }
 
